@@ -1,4 +1,4 @@
-name: Build Android APK (from zip)
+name: Build Android APK
 
 on:
   push:
@@ -19,16 +19,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Unzip the project
-        run: |
-          ZIP=$(ls *.zip | head -n 1)
-          echo "Using $ZIP"
-          mkdir project
-          unzip -q "$ZIP" -d project
-          ROOT=$(dirname "$(find project -name settings.gradle.kts | head -n 1)")
-          echo "PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
-          echo "Project folder: $ROOT"
-
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -39,13 +29,12 @@ jobs:
           gradle-version: "8.14.3"
 
       - name: Build debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
         run: gradle assembleDebug --stacktrace --no-daemon
 
       - uses: actions/upload-artifact@v5
         with:
           name: app-debug-apk
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
       - name: Upload build reports on failure
@@ -53,5 +42,5 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: build-reports
-          path: ${{ env.PROJECT_DIR }}/app/build/reports/
+          path: app/build/reports/
           if-no-files-found: ignore
