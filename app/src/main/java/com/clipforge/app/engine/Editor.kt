@@ -26,6 +26,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.SpeedChangeEffect
+import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
@@ -185,7 +186,7 @@ fun captionLinesFor(m: EditorModel, frameW: Int): List<CapLine> {
 private class CaptionOverlay(
     private val lines: List<CapLine>, private val style: CaptionStyle, private val sizePx: Int, y: Float
 ) : TextOverlay() {
-    private val settings = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, y).build()
+    private val settings = StaticOverlaySettings.Builder().setBackgroundFrameAnchor(0f, y).build()
 
     override fun getText(presentationTimeUs: Long): SpannableString {
         val hit = activeCaption(lines, presentationTimeUs / 1000) ?: return blank(sizePx)
@@ -215,7 +216,7 @@ private class CaptionOverlay(
 
 @UnstableApi
 private class TimedTextOverlay(private val item: TextItem, private val sizePx: Int, y: Float) : TextOverlay() {
-    private val settings = OverlaySettings.Builder().setBackgroundFrameAnchor(0f, y).build()
+    private val settings = StaticOverlaySettings.Builder().setBackgroundFrameAnchor(0f, y).build()
 
     override fun getText(presentationTimeUs: Long): SpannableString {
         val t = presentationTimeUs / 1000
