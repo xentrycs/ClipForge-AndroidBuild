@@ -16,14 +16,16 @@ import androidx.compose.runtime.setValue
 import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
+import androidx.media3.common.OverlaySettings
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
+import androidx.media3.common.audio.SpeedChangingAudioProcessor
 import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
-import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
@@ -258,8 +260,15 @@ object EditorExport {
             val clipping = MediaItem.ClippingConfiguration.Builder()
                 .setStartPositionMs(s.startMs).setEndPositionMs(s.endMs).build()
             val b = EditedMediaItem.Builder(MediaItem.Builder().setUri(src).setClippingConfiguration(clipping).build())
-            if (s.speed != 1f) b.setSpeed(constantSpeed(s.speed))
-            if (s.volume != 1f) b.setEffects(Effects(listOf(volume(s.volume)), emptyList()))
+            val audioFx = ArrayList<AudioProcessor>()
+            val videoFx = ArrayList<Effect>()
+            if (s.speed != 1f) {
+                // Media3 1.6 removed EditedMediaItem.Builder.setSpeed: speed is now an audio processor + a video effect.
+                audioFx.add(SpeedChangingAudioProcessor(constantSpeed(s.speed)))
+                videoFx.add(SpeedChangeEffect(s.speed))
+            }
+            if (s.volume != 1f) audioFx.add(volume(s.volume))
+            if (audioFx.isNotEmpty() || videoFx.isNotEmpty()) b.setEffects(Effects(audioFx, videoFx))
             b.build()
         }
 
