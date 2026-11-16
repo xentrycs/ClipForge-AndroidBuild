@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.ClipForge" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">#0A0F24</item>
+    </style>
+    <color name="ic_bg">#EBE7E2</color>
+</resources>
