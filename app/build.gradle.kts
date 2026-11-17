@@ -14,8 +14,8 @@ android {
         // Android 10+: lets exports go to the public gallery (Movies/ClipForge) with no storage permission.
         minSdk = 29
         targetSdk = 35
-        versionCode = 12
-        versionName = "6.0"
+        versionCode = 13
+        versionName = "6.1"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 

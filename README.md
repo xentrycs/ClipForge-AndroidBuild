@@ -1,4 +1,4 @@
-# ClipForge for Android (v6.0)
+# ClipForge for Android (v6.1)
 
 Automatic highlight clipper and video saver. Give it a video; it finds the moments most likely to hook people
 and cuts each one into its own MP4. Also saves YouTube / Shorts / Instagram videos straight to your gallery.
@@ -19,7 +19,7 @@ Kotlin, Jetpack Compose (Material 3), Media3 (ExoPlayer + Transformer), Room, yt
 - **Reveal detection**: a quiet beat followed by a loud burst (punchlines, twists, drops).
 - **Reaction detection**: laughter, applause and crowd roars.
 - **Picture analysis**: fast action, scene cuts and flashes.
-- **Transcript (optional, free, offline)**: Vosk turns speech into words. Used to find hook lines
+- **Transcript (optional, free, offline, English)**: Vosk turns speech into words. Used to find hook lines
   ("no way", "secret", questions, emotional lines), and to avoid dead air and "um/uh" stretches.
   The ~40 MB English model downloads once on first analysis. Skipped automatically for music, other languages,
   or if the download fails.
@@ -44,10 +44,28 @@ Open it from **Edit** on any clip's full-screen preview, or **Open the video edi
 - **Canvas**: 9:16 (TikTok), 1:1, 16:9 or Original. The **whole video is fitted inside the frame** with bars
   around it, exactly like CapCut. Nothing is cropped (preview and export match). Default is 9:16.
 - **Text**: add text at the playhead (top / middle / bottom, 3 colours), delete anytime.
-- **Auto captions**: generated from the speech (Vosk, offline, English). Three styles (Classic, Pop with the current
-  word highlighted, Bold). Captions follow your cuts and speed changes automatically.
+- **Auto subtitles** (the main feature of the editor, see below).
 - **Export**: renders everything into one MP4 in the gallery (`Movies/ClipForge`), in the background with a
   notification. Not yet in the editor: filters, music, transitions, stickers.
+
+### Auto subtitles
+Open the editor, tap **Captions**, pick the spoken language and tap **Generate subtitles**. Speech recognition runs on the
+phone (Vosk, offline). Each language downloads its model once. Subtitles follow your cuts and speed changes.
+
+- **12 styles**, each shown as a live picture you can tap: Hormozi, Beast, Karaoke, Marker, Sticker, Sunset, Neon,
+  One Word, Classic, Minimal, Elegant, Typewriter. Outlines, shadows, glow, gradient text, pill / marker boxes, and a pop
+  animation on the word being said.
+- **Adjust** (every style): size, position (top / middle / bottom or anywhere between), words per line (Auto, 1 to 5),
+  spoken-word colour, word-pop on / off, and colouring of key words (hook words, strong feelings, numbers).
+- **Text tab**: every subtitle line with its time. Tap a line to jump there, tap the pencil to fix a wrong word or delete
+  the line. Fixes show in the preview and in the export.
+- **Languages**: English, English (accurate, 128 MB), English (India), Hindi, Spanish, French, German, Portuguese,
+  Italian, Russian, Turkish.
+- **Smarter lines**: capital letters on "I" and sentence starts, lines never end on words like "the" / "and" / "to", and a
+  line stays up until the next one starts, so nothing flickers.
+- **Save subtitles file (.srt)** to `Downloads/ClipForge`, for use in any other player or editor.
+- The preview and the export use the same drawing code, so the saved video matches what you saw.
+
 
 The old Original / 9:16 / 1:1 export on the results screen now also **fits** the whole picture instead of cropping
 (a 16:9 option was added).
@@ -81,7 +99,7 @@ The old Original / 9:16 / 1:1 export on the results screen now also **fits** the
 
 ## Limits to know
 - The score is a relative signal strength, not a prediction of virality. Category labels describe the signal,
-  not meaning. Transcripts are English only and not caption-perfect.
+  not meaning. Speech recognition is good, not perfect: no punctuation, and names and fast speech get mistakes. Fix them in the Text tab. The highlight finder only uses the English transcript.
 - Vertical / square / wide export fits the whole picture with bars; there is no blurred-background option yet.
 - Each project keeps a copy of its source video, so large videos use phone storage.
 - YouTube and Instagram change often. If downloads stop working, update the youtubedl-android version.

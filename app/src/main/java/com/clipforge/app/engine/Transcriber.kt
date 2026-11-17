@@ -46,20 +46,41 @@ class Transcript(val words: List<Word>, durationMs: Long) {
     }
 }
 
-/** Downloads (once, ~40 MB) and unpacks the small English speech model into the app's private storage. */
+/** One speech model the user can pick. [name] is the model's folder and zip name on alphacephei.com/vosk/models. */
+class SpeechModel(val id: String, val label: String, val name: String, val sizeMb: Int) {
+    val link: String get() = "https://alphacephei.com/vosk/models/$name.zip"
+}
+
+object SpeechModels {
+    val all = listOf(
+        SpeechModel("en", "English", "vosk-model-small-en-us-0.15", 40),
+        SpeechModel("en-acc", "English (accurate)", "vosk-model-en-us-0.22-lgraph", 128),
+        SpeechModel("en-in", "English (India)", "vosk-model-small-en-in-0.4", 36),
+        SpeechModel("hi", "Hindi", "vosk-model-small-hi-0.22", 42),
+        SpeechModel("es", "Spanish", "vosk-model-small-es-0.42", 39),
+        SpeechModel("fr", "French", "vosk-model-small-fr-0.22", 41),
+        SpeechModel("de", "German", "vosk-model-small-de-0.15", 45),
+        SpeechModel("pt", "Portuguese", "vosk-model-small-pt-0.3", 31),
+        SpeechModel("it", "Italian", "vosk-model-small-it-0.22", 48),
+        SpeechModel("ru", "Russian", "vosk-model-small-ru-0.22", 45),
+        SpeechModel("tr", "Turkish", "vosk-model-small-tr-0.3", 35)
+    )
+    val default = all[0]
+}
+
+/** Downloads (once per language, 30-130 MB) and unpacks a speech model into the app's private storage. */
 object VoskModel {
-    private const val NAME = "vosk-model-small-en-us-0.15"
-    private const val LINK = "https://alphacephei.com/vosk/models/$NAME.zip"
+    private fun ready(dir: File) = File(dir, "am/final.mdl").exists() || File(dir, "conf/model.conf").exists()
 
     /** Returns the model folder, or null if it could not be downloaded (offline, blocked...). */
-    suspend fun ensure(ctx: Context, onDownload: (Float) -> Unit): File? = withContext(Dispatchers.IO) {
+    suspend fun ensure(ctx: Context, model: SpeechModel = SpeechModels.default, onDownload: (Float) -> Unit): File? = withContext(Dispatchers.IO) {
         val root = File(ctx.filesDir, "vosk").apply { mkdirs() }
-        val dir = File(root, NAME)
-        if (File(dir, "am/final.mdl").exists()) return@withContext dir
-        val zip = File(root, "model.zip")
+        val dir = File(root, model.name)
+        if (ready(dir)) return@withContext dir
+        val zip = File(root, "model_${model.id}.zip")
         try {
             dir.deleteRecursively()
-            val conn = URL(LINK).openConnection() as HttpURLConnection
+            val conn = URL(model.link).openConnection() as HttpURLConnection
             conn.connectTimeout = 20_000
             conn.readTimeout = 30_000
             conn.connect()
@@ -93,7 +114,7 @@ object VoskModel {
                 }
             }
             zip.delete()
-            if (File(dir, "am/final.mdl").exists()) dir else null
+            if (ready(dir)) dir else null
         } catch (e: CancellationException) {
             zip.delete(); dir.deleteRecursively()
             throw e
@@ -262,6 +283,13 @@ object TextScore {
         "have", "is", "are", "imagine", "ever", "ask"
     )
     private val fillers = setOf("um", "uh", "uhm", "er", "hmm", "erm")
+
+    private val numberWords = setOf(
+        "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "twenty", "fifty", "hundred", "thousand"
+    )
+
+    /** Words worth colouring in subtitles: hook words, strong feelings and numbers. */
+    fun isKeyword(w: String): Boolean = w in hookWords || w in emoWords || w in numberWords || w.any { it.isDigit() }
 
     fun sentenceScore(s: Sentence): Float {
         if (s.words.size < 4) return 0f

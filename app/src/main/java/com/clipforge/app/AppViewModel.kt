@@ -1,8 +1,11 @@
 package com.clipforge.app
 
 import android.app.Application
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +31,7 @@ import com.clipforge.app.engine.Meta
 import com.clipforge.app.engine.Quality
 import com.clipforge.app.engine.SceneAnalyzer
 import com.clipforge.app.engine.Thumbs
+import com.clipforge.app.engine.buildSrt
 import com.clipforge.app.engine.YouTubeFetcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -143,25 +147,58 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun generateCaptions(m: EditorModel) {
         if (m.capBusy != null) return
+        val lang = m.capLang
         viewModelScope.launch {
             m.capError = null
-            m.capBusy = "Preparing the speech model…"
+            m.capInfo = null
+            m.capBusy = "Preparing the ${lang.label} speech model…"
             try {
-                val dir = VoskModel.ensure(ctx) { p -> m.capBusy = "Downloading speech model (first time only)… ${(p * 100).toInt()}%" }
+                val dir = VoskModel.ensure(ctx, lang) { p ->
+                    m.capBusy = "Downloading ${lang.label} speech model (${lang.sizeMb} MB, first time only)… ${(p * 100).toInt()}%"
+                }
                 if (dir == null) {
                     m.capError = "Couldn't download the speech model. Check your internet and try again."
                 } else {
                     m.capBusy = "Listening to the video…"
                     val t = Transcriber.transcribe(dir, m.sourcePath, m.durationMs) { p -> m.capBusy = "Listening to the video… ${(p * 100).toInt()}%" }
-                    if (t.words.isEmpty()) m.capError = "No speech was found in this video."
+                    if (t.words.isEmpty()) m.capError = "No speech was found in this video. If it is in another language, pick that language under More."
                     else { m.words = t.words; m.captionsOn = true }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                m.capError = "Captions failed: ${e.message?.lineSequence()?.firstOrNull().orEmpty()}"
+                m.capError = "Subtitles failed: ${e.message?.lineSequence()?.firstOrNull().orEmpty()}"
             } finally {
                 m.capBusy = null
+            }
+        }
+    }
+
+    /** Saves the subtitles as a standard .srt file in Downloads/ClipForge. */
+    fun saveSrt(m: EditorModel) {
+        viewModelScope.launch {
+            try {
+                val name = withContext(Dispatchers.IO) {
+                    val text = buildSrt(m)
+                    if (text.isBlank()) throw IllegalStateException("There are no subtitles to save.")
+                    val base = m.title.replace(Regex("[^A-Za-z0-9 _.-]"), "").trim().take(60).ifEmpty { "subtitles" }
+                    val file = "ClipForge_${base}_${System.currentTimeMillis()}.srt"
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, file)
+                        put(MediaStore.MediaColumns.MIME_TYPE, "application/x-subrip")
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/ClipForge")
+                    }
+                    val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("Could not create the file.")
+                    ctx.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                        ?: throw IllegalStateException("Could not write the file.")
+                    file
+                }
+                m.capInfo = "Saved $name to Downloads/ClipForge."
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                m.capInfo = "Couldn't save the file: ${e.message ?: "unknown error"}"
             }
         }
     }

@@ -4,7 +4,9 @@ package com.clipforge.app.ui
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,12 +20,19 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -47,7 +56,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -66,9 +78,14 @@ import androidx.navigation.NavController
 import com.clipforge.app.AppViewModel
 import com.clipforge.app.engine.AspectMode
 import com.clipforge.app.engine.CAPTION_STYLES
-import com.clipforge.app.engine.activeCaption
+import com.clipforge.app.engine.CapLine
+import com.clipforge.app.engine.CaptionRenderer
+import com.clipforge.app.engine.EditorModel
+import com.clipforge.app.engine.SpeechModels
+import com.clipforge.app.engine.activeLine
 import com.clipforge.app.engine.captionLinesFor
 import com.clipforge.app.engine.locateOut
+import com.clipforge.app.engine.readingLines
 import kotlinx.coroutines.delay
 import java.io.File
 import kotlin.math.max
@@ -176,25 +193,21 @@ fun EditorScreen(vm: AppViewModel, nav: NavController) {
                         }
                     }
                 }
-                // captions
+                // captions: drawn by the same renderer the export uses, so the preview matches the saved video
                 if (m.captionsOn && m.words.isNotEmpty()) {
-                    val style = CAPTION_STYLES[m.style.coerceIn(0, CAPTION_STYLES.lastIndex)]
-                    val lines = remember(m.words, segSnap, m.style, m.canvas) { captionLinesFor(m, if (m.canvas.w > 0) m.canvas.w else max(m.widthPx, 480)) }
-                    activeCaption(lines, outPos)?.let { (line, cur) ->
-                        Box(Modifier.fillMaxSize().padding(bottom = maxHeight * 0.14f), contentAlignment = Alignment.BottomCenter) {
-                            val txt = buildAnnotatedString {
-                                line.words.forEachIndexed { i, w ->
-                                    if (i > 0) append(" ")
-                                    val word = if (style.upper) w.text.uppercase() else w.text
-                                    if (i == cur && style.highlight != null) withStyle(SpanStyle(color = Color(style.highlight!!))) { append(word) }
-                                    else append(word)
-                                }
-                            }
-                            Text(
-                                txt, color = Color.White, fontSize = (fs * 0.058f * style.sizeMul).sp, fontWeight = FontWeight.Bold,
-                                modifier = Modifier.background(Color(0xB3000000)).padding(horizontal = 6.dp)
-                            )
-                        }
+                    val frameW = m.frameWidth()
+                    val opts = m.capOpts()
+                    val lines = remember(m.words, segSnap, opts.style, opts.words, opts.sizeScale, m.canvas) { captionLinesFor(m, frameW) }
+                    val line = activeLine(lines, outPos)
+                    if (line != null) {
+                        val bmp = CaptionRenderer.render(line, outPos, opts, frameW)
+                        val img = remember(bmp) { bmp.asImageBitmap() }
+                        val h = maxWidth * (bmp.height.toFloat() / bmp.width)
+                        Image(
+                            img, null,
+                            Modifier.fillMaxWidth().height(h).offset(y = maxHeight * opts.posY - h / 2),
+                            contentScale = ContentScale.FillWidth
+                        )
                     }
                 }
             }
@@ -290,7 +303,7 @@ fun EditorScreen(vm: AppViewModel, nav: NavController) {
                         }
                     }
                     "text" -> TextPanel(m, outPos)
-                    "captions" -> CaptionPanel(vm, m)
+                    "captions" -> CaptionPanel(vm, m, outPos) { t -> seekOut(t) }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -383,34 +396,203 @@ private fun TextPanel(m: com.clipforge.app.engine.EditorModel, outPos: Long) {
     }
 }
 
+// =====================================================================================================================
+//  Subtitles panel
+// =====================================================================================================================
+
+private val HIGHLIGHT_COLORS = listOf(0xFFFFD60A, 0xFF30D158, 0xFF64D2FF, 0xFFFF2D55, 0xFFFF9F0A, 0xFFBF5AF2, 0xFFFFFFFF).map { it.toInt() }
+
 @Composable
-private fun CaptionPanel(vm: AppViewModel, m: com.clipforge.app.engine.EditorModel) {
+private fun CaptionPanel(vm: AppViewModel, m: EditorModel, outPos: Long, seekOut: (Long) -> Unit) {
+    var tab by remember { mutableStateOf(0) }
     val busy = m.capBusy
-    when {
-        busy != null -> {
-            Muted(busy)
-            Spacer(Modifier.height(8.dp))
-            LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent, trackColor = CardBg)
-        }
-        m.words.isEmpty() -> {
-            Muted("Creates captions from the speech in your video. Works offline; the first time it downloads a ~40 MB speech model. English only.")
-            Spacer(Modifier.height(8.dp))
-            GradientButton("Generate captions", Modifier.fillMaxWidth()) { vm.generateCaptions(m) }
-        }
-        else -> {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Show captions", color = TextPrimary, modifier = Modifier.weight(1f))
-                Switch(checked = m.captionsOn, onCheckedChange = { m.captionsOn = it })
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CAPTION_STYLES.forEachIndexed { i, s ->
-                    FilterChip(selected = m.style == i, onClick = { m.style = i }, label = { Text(s.name) })
+    if (busy != null) {
+        Muted(busy)
+        Spacer(Modifier.height(8.dp))
+        LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent, trackColor = CardBg)
+    } else if (m.words.isEmpty()) {
+        Text("Auto subtitles", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Muted("Listens to the speech in your video and writes the subtitles for you, on your phone. Each language downloads a small speech model once.")
+        Spacer(Modifier.height(8.dp))
+        LanguageChips(m)
+        Spacer(Modifier.height(8.dp))
+        GradientButton("Generate subtitles", Modifier.fillMaxWidth()) { vm.generateCaptions(m) }
+    } else {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Style", "Adjust", "Text", "More").forEachIndexed { i, l ->
+                    FilterChip(selected = tab == i, onClick = { tab = i }, label = { Text(l) })
                 }
             }
-            Spacer(Modifier.height(6.dp))
-            SoftButton("Regenerate", Modifier.fillMaxWidth()) { vm.generateCaptions(m) }
+            Switch(checked = m.captionsOn, onCheckedChange = { m.captionsOn = it })
+        }
+        Spacer(Modifier.height(6.dp))
+        when (tab) {
+            0 -> StyleTab(m)
+            1 -> AdjustTab(m)
+            2 -> TextTab(m, outPos, seekOut)
+            else -> MoreTab(vm, m)
         }
     }
     m.capError?.let { Spacer(Modifier.height(6.dp)); Text(it, color = Danger, fontSize = 13.sp) }
+}
+
+@Composable
+private fun LanguageChips(m: EditorModel) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SpeechModels.all.forEach { l ->
+            FilterChip(
+                selected = m.capLang.id == l.id, onClick = { m.capLang = l },
+                label = { Text(if (l.sizeMb >= 100) "${l.label} · ${l.sizeMb} MB" else l.label) }
+            )
+        }
+    }
+    if (m.capLang.id == "en-acc") {
+        Spacer(Modifier.height(4.dp))
+        Muted("Better at names and fast speech, but a bigger download and slower. Best on newer phones.")
+    }
+}
+
+/** Each style shown as a small live picture of itself. Tap to use it. */
+@Composable
+private fun StyleTab(m: EditorModel) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        CAPTION_STYLES.forEachIndexed { i, s ->
+            val picked = m.style == i
+            val img = remember(s.id, m.capColor) { CaptionRenderer.sample(s, m.capColor).asImageBitmap() }
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable { m.style = i; m.captionsOn = true }
+            ) {
+                Box(
+                    Modifier.width(118.dp).height(62.dp).clip(RoundedCornerShape(12.dp))
+                        .background(Brush.linearGradient(listOf(Color(0xFF4A5070), Color(0xFF1A1E36))))
+                        .border(if (picked) 2.dp else 1.dp, if (picked) Accent else Color(0x33FFFFFF), RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                }
+                Text(s.name, color = if (picked) Accent2 else TextSecondary, fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdjustTab(m: EditorModel) {
+    Column(Modifier.heightIn(max = 170.dp).verticalScroll(rememberScrollState())) {
+        Muted("Size  ${(m.capSize * 100).toInt()}%")
+        Slider(value = m.capSize, onValueChange = { m.capSize = it }, valueRange = 0.6f..1.6f)
+
+        Muted("Position")
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Top" to 0.15f, "Middle" to 0.5f, "Bottom" to 0.78f).forEach { (l, v) ->
+                FilterChip(selected = kotlin.math.abs(m.capPos - v) < 0.02f, onClick = { m.capPos = v }, label = { Text(l) })
+            }
+        }
+        Slider(value = m.capPos, onValueChange = { m.capPos = it }, valueRange = 0.1f..0.92f)
+
+        Muted("Words per line")
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(0, 1, 2, 3, 4, 5).forEach { n ->
+                FilterChip(selected = m.capWords == n, onClick = { m.capWords = n }, label = { Text(if (n == 0) "Auto" else "$n") })
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+        Muted("Spoken-word colour")
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Swatch(null, m.capColor == null) { m.capColor = null }
+            HIGHLIGHT_COLORS.forEach { c -> Swatch(Color(c), m.capColor == c) { m.capColor = c } }
+        }
+
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Word pop animation", color = TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Switch(checked = m.capPop, onCheckedChange = { m.capPop = it })
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Colour key words (hooks, feelings, numbers)", color = TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Switch(checked = m.capKeywords, onCheckedChange = { m.capKeywords = it })
+        }
+    }
+}
+
+@Composable
+private fun Swatch(color: Color?, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(30.dp).clip(CircleShape).background(color ?: Color(0x33FFFFFF))
+            .border(if (selected) 2.dp else 1.dp, if (selected) Color.White else Color(0x55FFFFFF), CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (color == null) Text("Auto", color = TextPrimary, fontSize = 9.sp)
+    }
+}
+
+/** Every subtitle line, so mistakes in the speech recognition can be fixed. */
+@Composable
+private fun TextTab(m: EditorModel, outPos: Long, seekOut: (Long) -> Unit) {
+    val segSnap = m.segs.toList()
+    val lines = remember(m.words, segSnap) { readingLines(m) }
+    var editing by remember { mutableStateOf<CapLine?>(null) }
+    val listState = rememberLazyListState()
+    val activeIdx = lines.indexOfFirst { outPos >= it.startMs && outPos < it.showUntilMs }
+    LaunchedEffect(activeIdx) { if (activeIdx >= 0) listState.animateScrollToItem(activeIdx) }
+
+    Muted("Tap a line to jump to it. Tap ✎ to fix a wrong word.")
+    LazyColumn(Modifier.fillMaxWidth().height(140.dp), state = listState) {
+        itemsIndexed(lines) { i, l ->
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                    .background(if (i == activeIdx) GlassFillStrong else Color.Transparent)
+                    .clickable { seekOut(l.startMs) }.padding(start = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(clock(l.startMs), color = TextSecondary, fontSize = 11.sp, modifier = Modifier.width(38.dp))
+                Text(l.words.joinToString(" ") { it.text }, color = TextPrimary, fontSize = 14.sp, modifier = Modifier.weight(1f).padding(vertical = 6.dp))
+                Text("✎", color = Accent2, fontSize = 16.sp, modifier = Modifier.clickable { editing = l }.padding(horizontal = 10.dp, vertical = 6.dp))
+            }
+        }
+    }
+
+    editing?.let { l ->
+        var txt by remember(l) { mutableStateOf(l.words.joinToString(" ") { it.text }) }
+        AlertDialog(
+            onDismissRequest = { editing = null },
+            containerColor = Bg2,
+            title = { Text("Edit subtitle", color = TextPrimary) },
+            text = {
+                OutlinedTextField(
+                    value = txt, onValueChange = { txt = it }, modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent, unfocusedBorderColor = Color(0x40FFFFFF),
+                        focusedTextColor = TextPrimary, unfocusedTextColor = TextPrimary, cursorColor = Accent
+                    )
+                )
+            },
+            confirmButton = { TextButton(onClick = { m.editCaption(l, txt); editing = null }) { Text("Save", color = Accent) } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { m.editCaption(l, ""); editing = null }) { Text("Delete line", color = Danger) }
+                    TextButton(onClick = { editing = null }) { Text("Cancel", color = TextSecondary) }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun MoreTab(vm: AppViewModel, m: EditorModel) {
+    Column(Modifier.heightIn(max = 170.dp).verticalScroll(rememberScrollState())) {
+        Muted("Speech language")
+        LanguageChips(m)
+        Spacer(Modifier.height(8.dp))
+        SoftButton("Regenerate (replaces your edits)", Modifier.fillMaxWidth()) { vm.generateCaptions(m) }
+        Spacer(Modifier.height(6.dp))
+        SoftButton("Save subtitles file (.srt)", Modifier.fillMaxWidth()) { vm.saveSrt(m) }
+        Spacer(Modifier.height(6.dp))
+        SoftButton("Remove subtitles", Modifier.fillMaxWidth(), danger = true) { m.words = emptyList(); m.captionsOn = false; m.capInfo = null }
+        m.capInfo?.let { Spacer(Modifier.height(6.dp)); Muted(it) }
+    }
 }

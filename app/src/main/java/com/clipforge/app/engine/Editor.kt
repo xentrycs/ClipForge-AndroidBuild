@@ -48,16 +48,6 @@ data class Seg(val id: Int, val startMs: Long, val endMs: Long, val speed: Float
 /** Text on the picture. Times are on the finished video's timeline. pos: 0 top, 1 middle, 2 bottom. */
 data class TextItem(val id: Int, val text: String, val startMs: Long, val endMs: Long, val pos: Int, val color: Int)
 
-class OutWord(val startMs: Long, val endMs: Long, val text: String)
-class CapLine(val startMs: Long, val endMs: Long, val words: List<OutWord>)
-class CaptionStyle(val name: String, val upper: Boolean, val highlight: Int?, val sizeMul: Float)
-
-val CAPTION_STYLES = listOf(
-    CaptionStyle("Classic", false, null, 1f),
-    CaptionStyle("Pop", false, 0xFFFFD60A.toInt(), 1f),
-    CaptionStyle("Bold", true, 0xFF30D158.toInt(), 1.25f)
-)
-
 /** Everything about one edit in progress. Lives in the ViewModel so it survives leaving the screen. */
 class EditorModel(val sourcePath: String, val title: String, val widthPx: Int, val heightPx: Int, val durationMs: Long) {
     private var ids = 0
@@ -66,11 +56,50 @@ class EditorModel(val sourcePath: String, val title: String, val widthPx: Int, v
     var selected by mutableStateOf(0)
     var canvas by mutableStateOf(AspectMode.VERTICAL)
 
-    var words by mutableStateOf<List<Word>>(emptyList())
+    // ---- subtitles
+    var words by mutableStateOf<List<Word>>(emptyList())      // recognised words, on the SOURCE video's timeline
     var captionsOn by mutableStateOf(false)
-    var style by mutableStateOf(1)
+    var style by mutableStateOf(0)                            // index into CAPTION_STYLES
+    var capSize by mutableStateOf(1f)                         // size multiplier on top of the style
+    var capPos by mutableStateOf(0.78f)                       // 0 = top .. 1 = bottom
+    var capWords by mutableStateOf(0)                         // words per line, 0 = the style's own
+    var capColor by mutableStateOf<Int?>(null)                // spoken-word colour override
+    var capPop by mutableStateOf(true)
+    var capKeywords by mutableStateOf(false)
+    var capLang by mutableStateOf(SpeechModels.default)
     var capBusy by mutableStateOf<String?>(null)
     var capError by mutableStateOf<String?>(null)
+    var capInfo by mutableStateOf<String?>(null)
+
+    fun capOpts() = CapOpts(
+        CAPTION_STYLES[style.coerceIn(0, CAPTION_STYLES.lastIndex)], capSize, capPos, capWords, capColor, capPop, capKeywords
+    )
+
+    /** Frame width in pixels that captions are drawn for (the same number the export uses). */
+    fun frameWidth(): Int = if (canvas.w > 0) canvas.w else max(widthPx, 480)
+
+    /** Replaces the text of one caption line. The new words share the line's time span. Empty text deletes the line. */
+    fun editCaption(line: CapLine, newText: String) {
+        val srcWords = line.words.mapNotNull { it.src }
+        if (srcWords.isEmpty()) return
+        val lineSet = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Word, Boolean>())
+        lineSet.addAll(srcWords)
+        val at = words.indexOfFirst { it in lineSet }
+        if (at < 0) return
+        val kept = words.filter { it !in lineSet }
+        val tokens = newText.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val a = srcWords.minOf { it.startMs }
+        val b = srcWords.maxOf { it.endMs }
+        val totalChars = tokens.sumOf { it.length }.coerceAtLeast(1)
+        var t = a
+        val fresh = tokens.map { tok ->
+            val d = (b - a) * tok.length / totalChars
+            Word(t, t + d, tok, 1f).also { t += d }
+        }
+        val merged = ArrayList<Word>(kept)
+        merged.addAll(at.coerceAtMost(merged.size), fresh)
+        words = merged.sortedBy { it.startMs }
+    }
 
     var exportBusy by mutableStateOf(false)
     var exportProgress by mutableStateOf(0f)
@@ -132,87 +161,7 @@ fun locateOut(segs: List<Seg>, outMs: Long): Pair<Int, Long> {
     return last to (segs.getOrNull(last)?.let { it.endMs - it.startMs } ?: 0L)
 }
 
-/** Caption words moved onto the finished timeline, following every cut and speed change. */
-fun outWords(segs: List<Seg>, words: List<Word>): List<OutWord> {
-    val out = ArrayList<OutWord>()
-    var off = 0L
-    for (s in segs) {
-        for (w in words) {
-            if (w.startMs >= s.startMs && w.startMs < s.endMs) {
-                val a = off + ((w.startMs - s.startMs) / s.speed).toLong()
-                val b = off + ((min(w.endMs, s.endMs) - s.startMs) / s.speed).toLong()
-                out.add(OutWord(a, max(b, a + 120), w.text))
-            }
-        }
-        off += s.outMs
-    }
-    return out.sortedBy { it.startMs }
-}
-
-fun buildLines(ow: List<OutWord>, maxChars: Int): List<CapLine> {
-    val out = ArrayList<CapLine>()
-    var cur = ArrayList<OutWord>()
-    var chars = 0
-    fun flush() {
-        if (cur.isNotEmpty()) { out.add(CapLine(cur.first().startMs, cur.last().endMs, cur)); cur = ArrayList(); chars = 0 }
-    }
-    for (w in ow) {
-        if (cur.isNotEmpty() && (w.startMs - cur.last().endMs > 700 || cur.size >= 5 || chars + 1 + w.text.length > maxChars)) flush()
-        cur.add(w)
-        chars += w.text.length + 1
-    }
-    flush()
-    return out
-}
-
-/** The caption line showing at [tMs] and the index of the word being said. */
-fun activeCaption(lines: List<CapLine>, tMs: Long): Pair<CapLine, Int>? {
-    val line = lines.firstOrNull { tMs >= it.startMs - 50 && tMs < it.endMs + 300 } ?: return null
-    var cur = 0
-    for ((i, w) in line.words.withIndex()) if (w.startMs <= tMs) cur = i
-    return line to cur
-}
-
-fun captionLinesFor(m: EditorModel, frameW: Int): List<CapLine> {
-    val style = CAPTION_STYLES[m.style.coerceIn(0, CAPTION_STYLES.lastIndex)]
-    val sizePx = frameW * 0.058f * style.sizeMul
-    val maxChars = max(8, ((frameW * 0.88f) / (sizePx * 0.56f)).toInt())
-    return buildLines(outWords(m.segs.toList(), m.words), maxChars)
-}
-
 // ---------------------------------------------------------------- export
-
-@UnstableApi
-private class CaptionOverlay(
-    private val lines: List<CapLine>, private val style: CaptionStyle, private val sizePx: Int, y: Float
-) : TextOverlay() {
-    private val settings = StaticOverlaySettings.Builder().setBackgroundFrameAnchor(0f, y).build()
-
-    override fun getText(presentationTimeUs: Long): SpannableString {
-        val hit = activeCaption(lines, presentationTimeUs / 1000) ?: return blank(sizePx)
-        val (line, cur) = hit
-        val sb = StringBuilder()
-        val ranges = ArrayList<IntRange>()
-        for (w in line.words) {
-            if (sb.isNotEmpty()) sb.append(' ')
-            val s0 = sb.length
-            sb.append(if (style.upper) w.text.uppercase() else w.text)
-            ranges.add(s0 until sb.length)
-        }
-        val sp = SpannableString(sb.toString())
-        val f = Spanned.SPAN_INCLUSIVE_INCLUSIVE
-        sp.setSpan(AbsoluteSizeSpan(sizePx), 0, sp.length, f)
-        sp.setSpan(StyleSpan(Typeface.BOLD), 0, sp.length, f)
-        sp.setSpan(ForegroundColorSpan(Color.WHITE), 0, sp.length, f)
-        sp.setSpan(BackgroundColorSpan(0xB3000000.toInt()), 0, sp.length, f)
-        style.highlight?.let { c ->
-            if (cur in ranges.indices) sp.setSpan(ForegroundColorSpan(c), ranges[cur].first, ranges[cur].last + 1, f)
-        }
-        return sp
-    }
-
-    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = settings
-}
 
 @UnstableApi
 private class TimedTextOverlay(private val item: TextItem, private val sizePx: Int, y: Float) : TextOverlay() {
@@ -281,9 +230,10 @@ object EditorExport {
 
         val overlays = ArrayList<TextureOverlay>()
         if (m.captionsOn && m.words.isNotEmpty()) {
-            val style = CAPTION_STYLES[m.style.coerceIn(0, CAPTION_STYLES.lastIndex)]
+            val opts = m.capOpts()
             val lines = captionLinesFor(m, frameW)
-            if (lines.isNotEmpty()) overlays.add(CaptionOverlay(lines, style, (frameW * 0.058f * style.sizeMul).toInt(), -0.62f))
+            // Anchor: +1 is the top edge of the frame, -1 the bottom edge; the middle of the caption block sits there.
+            if (lines.isNotEmpty()) overlays.add(CaptionOverlay(lines, opts, frameW, 1f - 2f * opts.posY))
         }
         for (t in m.texts) {
             val y = when (t.pos) { 0 -> 0.78f; 1 -> 0f; else -> -0.80f }
